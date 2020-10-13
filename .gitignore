@@ -1,0 +1,6 @@
+venv/
+node_modules/
+.vscode
+src/configs/.env
+*__pycache__
+config.flake8
