@@ -4,12 +4,12 @@ def format_playlists(playlists):
     """
 
     relevant_keys = {'name', 'tracks'}
-    return map(lambda pl: extract_relevant_keys(pl, relevant_keys), playlists)
+    return [extract_relevant_keys(pl, relevant_keys) for pl in playlists]
 
 
 def extract_relevant_keys(target_dict, relevant_keys):
     """
-    Extracts the relevant key-value pairs from the given dict. The relevant keys are passed in as 
+    Extracts the relevant key-value pairs from the given dict. The relevant keys are passed in as
     a tuple of strings.
     """
 
