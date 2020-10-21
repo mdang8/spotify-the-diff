@@ -1,7 +1,9 @@
 import requests
 import base64
 import os
+import datetime
 from dotenv import load_dotenv
+from src.server.lib.api_error import ApiError
 
 load_dotenv(dotenv_path=os.path.abspath('src/configs/.env'))
 
@@ -15,58 +17,17 @@ SPOTIFY_API_URL = 'https://api.spotify.com/v1'
 
 class SpotifyClient:
     token = ''
+    token_expiration = None
 
     def __init__(self):
         self.request_access_token_client_auth_flow()
 
-    def send_auth_request(self, type):
+    def is_token_expired(self):
         """
-        """
-
-        credentials_str = '{0}:{1}'.format(CLIENT_ID, CLIENT_SECRET)
-        encoded_credentials_str = base64.urlsafe_b64encode(credentials_str.encode()).decode()
-
-        headers = {
-            'Authorization': 'Basic {}'.format(encoded_credentials_str),
-            'Content-Type': 'application/x-www-form-urlencoded'
-        }
-        body = {
-            'grant_type': type
-        }
-
-        token_req = requests.post(SPOTIFY_AUTH_URL, headers=headers, data=body)
-        return token_req.json()
-
-    def request_access_token_client_auth_flow(self):
-        """
-        Requests an access token from Spotify by following the Client Credentials Flow. This is
-        used for operations that do not require authentication (e.g. read-only public data).
-
-        API Reference: https://developer.spotify.com/documentation/general/guides/authorization-guide/#client-credentials-flow
+        Does a simple timestamp comparison to check if the current access token is expired or not.
         """
 
-        self.token = self.send_auth_request('client_credentials')
-
-    def request_access_token_auth_code_flow(self):
-        """
-        Requests an access token from Spotify by following the Authorization Code flow.
-
-        API reference: https://developer.spotify.com/documentation/general/guides/authorization-guide/#authorization-code-flow
-        """
-
-        credentials_str = '{0}:{1}'.format(CLIENT_ID, CLIENT_SECRET)
-        encoded_credentials_str = base64.urlsafe_b64encode(credentials_str.encode()).decode()
-
-        headers = {
-            'Authorization': 'Basic {}'.format(encoded_credentials_str),
-            'Content-Type': 'application/x-www-form-urlencoded'
-        }
-        body = {
-            'grant_type': 'client_credentials'
-        }
-
-        token_req = requests.post(SPOTIFY_AUTH_URL, headers=headers, data=body)
-        self.token = token_req.json()
+        return self.token_expiration <= datetime.datetime.now()
 
     def extract_items_from_paging_obj(self, paging_obj, items):
         """
@@ -76,6 +37,9 @@ class SpotifyClient:
 
         API Reference: https://developer.spotify.com/documentation/web-api/reference/object-model/#paging-object
         """
+
+        if 'next' not in paging_obj:
+            return paging_obj
 
         if paging_obj['next'] is None:
             return paging_obj['items']
@@ -101,12 +65,80 @@ class SpotifyClient:
         Helper method for sending requests to Spotify's API with the proper access token.
         """
 
+        # requests a new access token if the current one is expired
+        if self.is_token_expired():
+            self.request_access_token_client_auth_flow()
+
         headers = {
             'Authorization': 'Bearer {}'.format(self.token)
         }
 
         req = requests.get(url, headers=headers, params=options)
+        json = req.json()
+
+        if 'error' in json:
+            raise ApiError(json['error']['status'], json['error']['message'])
+
         return req.json()
+
+    def send_auth_request(self, type):
+        """
+        """
+
+        credentials_str = '{0}:{1}'.format(CLIENT_ID, CLIENT_SECRET)
+        encoded_credentials_str = base64.urlsafe_b64encode(credentials_str.encode()).decode()
+
+        headers = {
+            'Authorization': 'Basic {}'.format(encoded_credentials_str),
+            'Content-Type': 'application/x-www-form-urlencoded'
+        }
+        body = {
+            'grant_type': type
+        }
+
+        token_req = requests.post(SPOTIFY_AUTH_URL, headers=headers, data=body)
+        return token_req.json()
+
+    def request_access_token_client_auth_flow(self):
+        """
+        Requests an access token from Spotify by following the Client Credentials Flow. This is
+        used for operations that do not require authentication (e.g. read-only public data).
+        Example object returned from Spotify API:
+            {
+                "access_token": "NgCXRKc...MzYjw",
+                "token_type": "bearer",
+                "expires_in": 3600,
+            }
+
+        API Reference: https://developer.spotify.com/documentation/general/guides/authorization-guide/#client-credentials-flow
+        """
+
+        token_obj = self.send_auth_request('client_credentials')
+        self.token = token_obj['access_token']
+        # calculates a new expiration timestamp based on the received auth token expiration
+        self.token_expiration = datetime.datetime.now() \
+            + datetime.timedelta(0, token_obj['expires_in'])
+
+    def request_access_token_auth_code_flow(self):
+        """
+        Requests an access token from Spotify by following the Authorization Code flow.
+
+        API reference: https://developer.spotify.com/documentation/general/guides/authorization-guide/#authorization-code-flow
+        """
+
+        credentials_str = '{0}:{1}'.format(CLIENT_ID, CLIENT_SECRET)
+        encoded_credentials_str = base64.urlsafe_b64encode(credentials_str.encode()).decode()
+
+        headers = {
+            'Authorization': 'Basic {}'.format(encoded_credentials_str),
+            'Content-Type': 'application/x-www-form-urlencoded'
+        }
+        body = {
+            'grant_type': 'client_credentials'
+        }
+
+        token_req = requests.post(SPOTIFY_AUTH_URL, headers=headers, data=body)
+        self.token = token_req.json()
 
     def get_current_user_playlist_tracks(self):
         """
@@ -150,7 +182,11 @@ class SpotifyClient:
         """
 
         playlists_url = '{0}/users/{1}/playlists'.format(SPOTIFY_API_URL, user_id)
-        return self.send_api_request(playlists_url)
+
+        try:
+            return self.send_api_request(playlists_url)
+        except ApiError:
+            return {}
 
     def get_all_playlist_tracks(self, playlist_id):
         """
